@@ -17,6 +17,6 @@ port = 54323
 
 [auth]
 enabled = true
-site_url = "http://localhost:3000"
-additional_redirect_urls = ["http://localhost:3000", "http://localhost:3000/**"]
+site_url = "https://fakebook-pearl.vercel.app"
+additional_redirect_urls = ["https://fakebook-pearl.vercel.app", "https://fakebook-pearl.vercel.app/**", "https://fakebook-git-main-galaluddinowais-projects.vercel.app", "https://fakebook-git-main-galaluddinowais-projects.vercel.app/**", "http://localhost:3000", "http://localhost:3000/**"]
 enable_signup = true
