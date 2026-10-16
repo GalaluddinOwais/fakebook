@@ -20,3 +20,6 @@ enabled = true
 site_url = "https://fakebook-pearl.vercel.app"
 additional_redirect_urls = ["https://fakebook-pearl.vercel.app", "https://fakebook-pearl.vercel.app/**", "https://fakebook-git-main-galaluddinowais-projects.vercel.app", "https://fakebook-git-main-galaluddinowais-projects.vercel.app/**", "http://localhost:3000", "http://localhost:3000/**"]
 enable_signup = true
+
+[auth.email]
+enable_confirmations = false
