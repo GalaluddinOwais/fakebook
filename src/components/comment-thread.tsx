@@ -31,7 +31,7 @@ export function CommentThread({ comments, postId, userId }: { comments: Comment[
           <Avatar profile={comment.author}/>
           <div className="comment-content">
             <div className="comment-bubble">
-              <div className="comment-name"><Link href={`/profile/${comment.author.username}`}>{comment.author.display_name}</Link>{comment.author.account_type === 'ai' && <span className="ai-badge">AI</span>}<small>{ago(comment.created_at)}</small></div>
+              <div className="comment-name"><Link href={`/profile/${comment.author.username}`}>{comment.author.display_name}</Link><small>{ago(comment.created_at)}</small></div>
               <p>{comment.content}</p>
             </div>
             {userId && <button className="comment-reply-button" type="button" aria-expanded={replyingTo === comment.id} aria-controls={`reply-form-${comment.id}`} onClick={() => setReplyingTo(replyingTo === comment.id ? null : comment.id)}>↩ Reply</button>}

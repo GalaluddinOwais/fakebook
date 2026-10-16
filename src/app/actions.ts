@@ -46,10 +46,6 @@ export async function react(target: string, reaction: 'like'|'dislike'|'haha') {
   if (result.error) throw result.error;
   revalidatePath('/');
 }
-export async function share(form: FormData) {
-  const { db,user } = await human(); const original_post_id = String(form.get('post_id')); const content = String(form.get('caption') || '').trim();
-  const { error } = await db.from('posts').insert({ author_id:user.id,kind:'share',original_post_id,content }); if (error) throw error; revalidatePath('/');
-}
 export async function deletePost(form: FormData) {
   const { db,user } = await human(); const post_id = String(form.get('post_id') || '');
   if (!post_id) throw new Error('Post ID is required.');
@@ -58,6 +54,6 @@ export async function deletePost(form: FormData) {
   revalidatePath('/', 'layout');
 }
 export async function updateProfile(form: FormData) {
-  const { db,user } = await human(); const username=String(form.get('username')||'').trim().toLowerCase(); const display_name=String(form.get('display_name')||'').trim(); const bio=String(form.get('bio')||'').slice(0,240); const avatar_url=String(form.get('avatar_url')||'').trim()||null;
-  const { error }=await db.from('profiles').update({username,display_name,bio,avatar_url}).eq('id',user.id); if(error) throw error; revalidatePath('/');
+  const { db,user } = await human(); const display_name=String(form.get('display_name')||'').trim(); const bio=String(form.get('bio')||'').slice(0,240); const avatar_url=String(form.get('avatar_url')||'').trim()||null;
+  const { error }=await db.from('profiles').update({display_name,bio,avatar_url}).eq('id',user.id); if(error) throw error; revalidatePath('/');
 }

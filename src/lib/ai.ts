@@ -61,7 +61,7 @@ export async function runFakebookAIForHumanEvent(event: Event) {
   if (claimError || claim !== true) return;
   try {
     const [{ data: post }, { data: profiles }, { data: comments }, { data: memory }] = await Promise.all([
-      db.from('posts').select('id,content,kind,original_post_id,author:profiles(display_name,username)').eq('id', event.post_id).single(),
+      db.from('posts').select('id,content,created_at,kind,original_post_id,author:profiles(display_name,username)').eq('id', event.post_id).single(),
       db.from('profiles').select('id,display_name,username,bio,personality,writing_style').eq('account_type','ai').limit(15),
       db.from('comments').select('id,content,author:profiles(display_name,username,account_type)').eq('post_id', event.post_id).order('created_at',{ascending:false}).limit(Math.max(1,Math.min(6,Number(process.env.AI_MAX_RECENT_COMMENTS||6)))),
       db.from('thread_memories').select('summary').eq('thread_id', event.post_id).maybeSingle(),
@@ -72,16 +72,20 @@ export async function runFakebookAIForHumanEvent(event: Event) {
     if (!parsed.success) throw new Error(`Invalid AI batch: ${parsed.error.issues.map(issue => issue.path.join('.') + ' ' + issue.message).join('; ')}`);
     const plan = parsed.data;
     const profilesToUse = profiles || [];
+    const { error: revealPlanError } = await db.from('posts').update({ ai_reactions_reveal_steps: Math.max(1, plan.comments.length) }).eq('id', event.post_id);
+    if (revealPlanError) throw new Error(`Could not save AI reveal schedule: ${revealPlanError.message}`);
     const actions: Array<Record<string, string>> = [];
     const reactionCounts = { likes: plan.likes, dislikes: plan.dislikes, haha: plan.haha };
     if (reactionCounts.likes + reactionCounts.dislikes + reactionCounts.haha === 0 && (plan.comments.length === 0 || profilesToUse.length === 0)) reactionCounts.likes = 1;
     if (reactionCounts.likes + reactionCounts.dislikes + reactionCounts.haha > 0) {
-      actions.push({ type: 'reaction_batch', ...Object.fromEntries(Object.entries(reactionCounts).map(([key,value])=>[key,String(value)])), interval_ms: '2000' });
+      actions.push({ type: 'reaction_batch', ...Object.fromEntries(Object.entries(reactionCounts).map(([key,value])=>[key,String(value)])), interval_ms: '60000' });
     }
     const { error: applyError } = await db.rpc('apply_ai_event', { p_event_id: event.id, p_thread_id: event.post_id, p_summary: plan.thread_summary, p_actions: actions });
     if (applyError) throw new Error(`Supabase apply_ai_event failed (${applyError.code || 'no code'}): ${applyError.message}${applyError.details ? `; ${applyError.details}` : ''}`);
     if (plan.comments.length && profilesToUse.length) {
-      const scheduledComments = plan.comments.map((content, index) => ({ post_id: event.post_id, author_id: profilesToUse[index % profilesToUse.length].id, content, visible_at: new Date(Date.now() + (index + 1) * 5000).toISOString() }));
+      const intervalMs = 60_000;
+      const postCreatedAt = new Date(post?.created_at || Date.now()).getTime();
+      const scheduledComments = plan.comments.map((content, index) => ({ post_id: event.post_id, author_id: profilesToUse[index % profilesToUse.length].id, content, visible_at: new Date(postCreatedAt + (index + 1) * intervalMs).toISOString() }));
       const { error: commentsError } = await db.from('comments').insert(scheduledComments);
       if (commentsError) throw new Error(`Could not schedule AI comments: ${commentsError.message}`);
     }
@@ -106,7 +110,7 @@ export async function runFakebookAIForCommentReply(event: { post_id: string; com
     ]);
     if (!post || !target || !profiles?.length) return;
     const profile = profiles[Math.floor(Math.random() * profiles.length)];
-    const prompt = `You are ${profile.display_name}, an AI neighbor. ${profile.personality || ''} Write one natural, concise reply to the target comment. The human just replied to it, so respond to their reply while keeping the conversation context. Return only JSON: {"reply":"..."}. Do not write another top-level comment.\nPost: ${post.content}\nTarget comment by ${target.author?.display_name || 'neighbor'}: ${target.content}\nHuman reply: ${event.content}\nRecent thread context: ${JSON.stringify(context || [])}`;
+    const prompt = `You are ${profile.display_name}, an AI neighbor. ${profile.personality || ''} Write one natural, concise reply to the target comment. The human just replied to it, so respond to their reply while keeping the conversation context. Return only JSON: {"reply":"..."}. Do not write another top-level comment.\nPost: ${post.content}\nTarget comment by ${target.author?.[0]?.display_name || 'neighbor'}: ${target.content}\nHuman reply: ${event.content}\nRecent thread context: ${JSON.stringify(context || [])}`;
     const provider: AIProvider = new GeminiProvider();
     const parsed = z.object({ reply: z.string().trim().min(1).max(500) }).safeParse(JSON.parse(await provider.generateStructuredJSON(prompt)));
     if (!parsed.success) throw new Error('Gemini returned an invalid comment reply.');
