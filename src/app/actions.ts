@@ -17,6 +17,38 @@ export async function createPost(form: FormData) {
   const { data, error } = await db.from('posts').insert({ author_id: user.id, content, kind: 'original' }).select('id').single(); if (error) throw error;
   after(async () => { await runFakebookAIForHumanEvent({ id: data.id, post_id: data.id, author_id: user.id, content }); revalidatePath('/'); }); revalidatePath('/');
 }
+export async function sharePost(form: FormData) {
+  const { db, user } = await human();
+  const source_post_id = String(form.get('post_id') || '');
+  const content = String(form.get('content') || '').trim();
+  if (!/^[0-9a-f-]{36}$/i.test(source_post_id)) throw new Error('Invalid post ID.');
+  if (content.length > 240) throw new Error('Share text must be 240 characters or fewer.');
+
+  const { data: source, error: sourceError } = await db.from('posts')
+    .select('id,kind,original_post_id')
+    .eq('id', source_post_id)
+    .maybeSingle();
+  if (sourceError || !source) throw new Error('The post you are sharing could not be found.');
+  const original_post_id = source.kind === 'share' && source.original_post_id
+    ? source.original_post_id
+    : source.id;
+  const { data: share, error } = await db.from('posts')
+    .insert({ author_id: user.id, kind: 'share', original_post_id, content })
+    .select('id')
+    .single();
+  if (error) throw error;
+
+  after(async () => {
+    await runFakebookAIForHumanEvent({
+      id: share.id,
+      post_id: share.id,
+      author_id: user.id,
+      content: content || 'Shared a post',
+    });
+    revalidatePath('/', 'layout');
+  });
+  revalidatePath('/', 'layout');
+}
 export async function addComment(form: FormData) {
   const { db, user } = await human();
   const post_id = String(form.get('post_id') || '');
@@ -45,6 +77,25 @@ export async function react(target: string, reaction: 'like'|'dislike'|'haha') {
   const result = prior?.reaction === reaction ? await db.from('post_reactions').delete().eq('id', prior.id) : await db.from('post_reactions').upsert({ post_id: target, user_id: user.id, reaction }, { onConflict: 'post_id,user_id' });
   if (result.error) throw result.error;
   revalidatePath('/');
+}
+export async function reactToComment(commentId: string, reaction: 'like'|'dislike'|'haha') {
+  const { db, user } = await human();
+  if (!/^[0-9a-f-]{36}$/i.test(commentId)) throw new Error('Invalid comment ID.');
+  if (!['like', 'dislike', 'haha'].includes(reaction)) throw new Error('Invalid reaction.');
+  const { data: prior, error: priorError } = await db.from('comment_reactions')
+    .select('id,reaction')
+    .eq('comment_id', commentId)
+    .eq('user_id', user.id)
+    .maybeSingle();
+  if (priorError) throw priorError;
+  const result = prior?.reaction === reaction
+    ? await db.from('comment_reactions').delete().eq('id', prior.id)
+    : await db.from('comment_reactions').upsert(
+        { comment_id: commentId, user_id: user.id, reaction },
+        { onConflict: 'comment_id,user_id' },
+      );
+  if (result.error) throw result.error;
+  revalidatePath('/', 'layout');
 }
 export async function deletePost(form: FormData) {
   const { db,user } = await human(); const post_id = String(form.get('post_id') || '');

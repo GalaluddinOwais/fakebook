@@ -3,7 +3,7 @@ import { Avatar } from '@/components/avatar';
 import { Feed } from '@/components/feed';
 import { createClient } from '@/lib/supabase/server';
 
-const postSelection = '*,author:profiles!posts_author_id_fkey(id,display_name,username,avatar_url,account_type),original:posts!original_post_id(id,content,author:profiles!posts_author_id_fkey(display_name,username)),comments(id,parent_comment_id,content,created_at,visible_at,author:profiles!comments_author_id_fkey(id,display_name,username,avatar_url,account_type)),post_reactions(reaction,user_id,created_at)';
+const postSelection = '*,author:profiles!posts_author_id_fkey(id,display_name,username,avatar_url,account_type),original:posts!original_post_id(id,content,author:profiles!posts_author_id_fkey(display_name,username)),comments(id,parent_comment_id,content,created_at,visible_at,author:profiles!comments_author_id_fkey(id,display_name,username,avatar_url,account_type),comment_reactions(reaction,user_id,created_at)),post_reactions(reaction,user_id,created_at)';
 
 export default async function ProfilePage({ params }: { params: Promise<{ username: string }> }) {
   const { username } = await params;
@@ -21,7 +21,6 @@ export default async function ProfilePage({ params }: { params: Promise<{ userna
     ? await db.from('posts')
         .select(postSelection, { count: 'exact' })
         .eq('author_id', profile.id)
-        .eq('kind', 'original')
         .order('created_at', { ascending: false })
         .limit(30)
     : { data: null, count: null };
