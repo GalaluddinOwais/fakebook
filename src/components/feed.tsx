@@ -1,9 +1,9 @@
-'use client';
+﻿'use client';
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
-import { addComment, advancePostReactionCounts, react, sharePost } from '@/app/actions';
+import { advancePostReactionCounts, react, sharePost } from '@/app/actions';
 import { Avatar } from '@/components/avatar';
 import { CommentThread } from '@/components/comment-thread';
 import { PostMenu } from '@/components/post-menu';
@@ -214,7 +214,7 @@ export function Feed({ posts, userId }: { posts: FeedPost[]; userId: string | nu
             <div>{postAuthor.username
               ? <Link href={`/profile/${postAuthor.username}`} className="name">{postAuthor.display_name}</Link>
               : <span className="name">{postAuthor.display_name}</span>}</div>
-            <small>{ago(post.created_at)}{post.kind === 'share' && ' · shared'}</small>
+            <small>{ago(post.created_at)}{post.kind === 'share' && ' | shared'}</small>
           </div>
           <PostMenu postId={post.id} canDelete={!!userId && userId === postAuthor.id}/>
         </div>
@@ -224,7 +224,7 @@ export function Feed({ posts, userId }: { posts: FeedPost[]; userId: string | nu
           {post.kind === 'share' && original && <>
             <div className="shared-by">{original.kind === 'share' ? 'Shared by ' : 'Originally by '}{originalAuthor?.username
               ? <Link href={`/profile/${originalAuthor.username}`}>{originalAuthor.display_name}</Link>
-              : originalAuthor?.display_name || 'a neighbor'}{original.kind === 'share' && <small> · {ago(original.created_at)}</small>}</div>
+              : originalAuthor?.display_name || 'a neighbor'}{original.kind === 'share' && <small> | {ago(original.created_at)}</small>}</div>
             <p>{original.kind === 'share' ? original.content || 'Shared a post' : original.content}</p>
             {original.kind === 'share' && nestedOriginal && <div className="shared-box nested-original">
               <div className="shared-by">Originally by {nestedAuthor?.username
@@ -238,17 +238,17 @@ export function Feed({ posts, userId }: { posts: FeedPost[]; userId: string | nu
         </div>
 
         <div className="post-stats">
-          <span>♥ {reactionCounts.like} likes · {reactionCounts.dislike} dislikes · {reactionCounts.haha} haha</span>
+          <span>Likes: {reactionCounts.like} · Dislikes: {reactionCounts.dislike} · Haha: {reactionCounts.haha}</span>
           <button type="button" onClick={() => setExpanded(expanded === post.id ? null : post.id)}>{visibleComments.length} comments</button>
         </div>
         <div className="post-actions">
-          <button className={myReaction === 'like' ? 'reaction-active' : ''} aria-pressed={myReaction === 'like'} disabled={pendingAction !== null} onClick={() => void runAction(`${post.id}:like`, () => react(post.id, 'like'))}>{pendingAction === `${post.id}:like` ? '... ' : ''}♡ <span>Like</span></button>
-          <button className={myReaction === 'dislike' ? 'reaction-active' : ''} aria-pressed={myReaction === 'dislike'} disabled={pendingAction !== null} onClick={() => void runAction(`${post.id}:dislike`, () => react(post.id, 'dislike'))}>{pendingAction === `${post.id}:dislike` ? '... ' : ''}⊘ <span>Dislike</span></button>
-          <button className={myReaction === 'haha' ? 'reaction-active' : ''} aria-pressed={myReaction === 'haha'} disabled={pendingAction !== null} onClick={() => void runAction(`${post.id}:haha`, () => react(post.id, 'haha'))}>{pendingAction === `${post.id}:haha` ? '... ' : ''}☺ <span>Haha</span></button>
-          <button onClick={() => setExpanded(expanded === post.id ? null : post.id)}>▢ <span>Comment</span></button>
+          <button className={myReaction === 'like' ? 'reaction-active' : ''} aria-pressed={myReaction === 'like'} disabled={pendingAction !== null} onClick={() => void runAction(`${post.id}:like`, () => react(post.id, 'like'))}><span>Like</span></button>
+          <button className={myReaction === 'dislike' ? 'reaction-active' : ''} aria-pressed={myReaction === 'dislike'} disabled={pendingAction !== null} onClick={() => void runAction(`${post.id}:dislike`, () => react(post.id, 'dislike'))}><span>Dislike</span></button>
+          <button className={myReaction === 'haha' ? 'reaction-active' : ''} aria-pressed={myReaction === 'haha'} disabled={pendingAction !== null} onClick={() => void runAction(`${post.id}:haha`, () => react(post.id, 'haha'))}><span>Haha</span></button>
+          <button onClick={() => setExpanded(expanded === post.id ? null : post.id)}><span>Comment</span></button>
           {userId
             ? <details className="share-menu">
-                <summary>↗ <span>Share</span></summary>
+                <summary><span>Share</span></summary>
                 <form action={sharePost}>
                   <input type="hidden" name="post_id" value={post.id}/>
                   <input name="content" placeholder="Add a thought (optional)" maxLength={240}/>
@@ -260,13 +260,6 @@ export function Feed({ posts, userId }: { posts: FeedPost[]; userId: string | nu
 
         {expanded === post.id && <div className="comments">
           <CommentThread comments={threadComments} postId={post.id} userId={userId}/>
-          {userId
-            ? <form action={addComment} className="comment-form">
-                <input type="hidden" name="post_id" value={post.id}/>
-                <input name="content" placeholder="Write a comment…" maxLength={1000} required/>
-                <SubmitButton pendingLabel="Sending...">↗</SubmitButton>
-              </form>
-            : <p className="login-prompt"><Link href="/auth?mode=login">Log in</Link> to join the conversation.</p>}
         </div>}
       </article>;
     })}

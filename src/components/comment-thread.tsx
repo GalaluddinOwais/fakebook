@@ -1,9 +1,8 @@
 ﻿'use client';
 
-import { useOptimistic, useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { addComment, reactToComment } from '@/app/actions';
-import { SubmitButton } from '@/components/submit-button';
+import { addComment, reactToComment, triggerCommentAI } from '@/app/actions';
 import { Avatar } from '@/components/avatar';
 
 type Comment = {
@@ -24,10 +23,34 @@ function ago(date: string) {
 export function CommentThread({ comments, postId, userId }: { comments: Comment[]; postId: string; userId: string | null }) {
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [pendingReaction, setPendingReaction] = useState<string | null>(null);
-  const [visibleComments, addOptimisticComment] = useOptimistic(
-    comments,
-    (current, next: Comment) => [...current, next],
-  );
+  const [submittingComment, setSubmittingComment] = useState(false);
+  const [confirmedComments, setConfirmedComments] = useState<Comment[]>([]);
+  useEffect(() => {
+    const serverIds = new Set(comments.map(comment => comment.id));
+    if (serverIds.size) setConfirmedComments(current => current.filter(comment => !serverIds.has(comment.id)));
+  }, [comments]);
+  async function submitComment(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (submittingComment) return;
+    const form = event.currentTarget;
+    setSubmittingComment(true);
+    try {
+      const { comment, shouldTriggerAI } = await addComment(new FormData(form));
+      const author = Array.isArray(comment.author) ? comment.author[0] : comment.author;
+      setConfirmedComments(current => current.some(item => item.id === comment.id)
+        ? current
+        : [...current, { ...comment, author } as Comment]);
+      form.reset();
+      if (shouldTriggerAI) void triggerCommentAI(postId, comment.id).catch(error => {
+        console.error('Could not trigger AI comment follow-up:', error);
+      });
+    } catch (error) {
+      console.error('Could not save comment:', error);
+    } finally {
+      setSubmittingComment(false);
+    }
+  }
+  const visibleComments = [...comments, ...confirmedComments.filter(saved => !comments.some(comment => comment.id === saved.id))];
   const byParent = new Map<string | null, Comment[]>();
   for (const comment of [...visibleComments].sort((a, b) => a.created_at.localeCompare(b.created_at))) byParent.set(comment.parent_comment_id, [...(byParent.get(comment.parent_comment_id) || []), comment]);
 
@@ -61,32 +84,29 @@ export function CommentThread({ comments, postId, userId }: { comments: Comment[
                       try { await reactToComment(comment.id, reaction); }
                       finally { setPendingReaction(null); }
                     }}
-                  >{pendingReaction === key ? 'â€¦ ' : ''}{reactionLabel(reaction)} {count > 0 ? count : ''}</button>;
+                  >{reactionLabel(reaction)} {count > 0 ? count : ''}</button>;
                 })}
               </div>
             </div>
           </div>
         </div>
         {userId && <button className="comment-reply-button" type="button" aria-expanded={replyingTo === comment.id} aria-controls={`reply-form-${comment.id}`} onClick={() => setReplyingTo(replyingTo === comment.id ? null : comment.id)}>Reply</button>}
-        {replyingTo === comment.id && userId && <form id={`reply-form-${comment.id}`} action={async formData => {
-          const content = String(formData.get('content') || '').trim();
-          addOptimisticComment({
-            id: `optimistic-${Date.now()}-${Math.random()}`,
-            parent_comment_id: comment.id,
-            content,
-            created_at: new Date().toISOString(),
-            visible_at: new Date().toISOString(),
-            author: { id: userId, display_name: 'You', account_type: 'human' },
-            comment_reactions: [],
-          });
-          await addComment(formData);
-        }} className="comment-form reply-form"><input type="hidden" name="post_id" value={postId}/><input type="hidden" name="parent_comment_id" value={comment.id}/><input name="content" placeholder={`Reply to ${comment.author.display_name}`} maxLength={1000} required autoFocus/><SubmitButton className="reply-submit" pendingLabel="Sending...">Send reply</SubmitButton></form>}
+        {replyingTo === comment.id && userId && <form id={`reply-form-${comment.id}`} onSubmit={submitComment} className="comment-form reply-form"><input type="hidden" name="post_id" value={postId}/><input type="hidden" name="parent_comment_id" value={comment.id}/><input name="content" placeholder={`Reply to ${comment.author.display_name}`} maxLength={1000} required autoFocus/><button className="reply-submit" type="submit" disabled={submittingComment}>{submittingComment ? 'Sending...' : 'Send reply'}</button></form>}
         {depth < 8 && render(comment.id, depth + 1)}
       </div>
     ));
   }
 
-  return <div className="comment-list">{render(null)}</div>;
+  return <div className="comment-list">
+    {render(null)}
+    {userId
+      ? <form onSubmit={submitComment} className="comment-form">
+          <input type="hidden" name="post_id" value={postId}/>
+          <input name="content" placeholder="Write a comment..." maxLength={1000} required/>
+          <button type="submit" disabled={submittingComment}>{submittingComment ? 'Sending...' : 'Send'}</button>
+        </form>
+      : <p className="login-prompt"><Link href="/auth?mode=login">Log in</Link> to join the conversation.</p>}
+  </div>;
 }
 
 function reactionLabel(reaction: 'like' | 'dislike' | 'haha') {

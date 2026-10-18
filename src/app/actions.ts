@@ -70,13 +70,39 @@ export async function addComment(form: FormData) {
     if (authorError) throw authorError;
     replyingToAI = parentAuthor?.account_type === 'ai';
   }
-  const { data, error } = await db.from('comments').insert({ post_id, author_id: user.id, parent_comment_id, content }).select('id').single();
+  const { data, error } = await db.from('comments').insert({ post_id, author_id: user.id, parent_comment_id, content })
+    .select('id,post_id,parent_comment_id,content,created_at,visible_at,author:profiles!comments_author_id_fkey(id,display_name,username,avatar_url,account_type),comment_reactions(reaction,user_id,created_at)')
+    .single();
   if (error) throw error;
-  if (!parent_comment_id || replyingToAI) after(async () => {
-    await runFakebookAIForCommentReply({ post_id, comment_id: parent_comment_id || data.id, content });
+  revalidatePath('/', 'layout');
+  return { comment: data, shouldTriggerAI: !parent_comment_id || replyingToAI };
+}
+export async function triggerCommentAI(postId: string, commentId: string) {
+  const { db, user } = await human();
+  const { data: comment, error } = await db.from('comments')
+    .select('id,post_id,parent_comment_id,content,author_id')
+    .eq('id', commentId)
+    .eq('post_id', postId)
+    .eq('author_id', user.id)
+    .maybeSingle();
+  if (error) throw error;
+  if (!comment) throw new Error('The comment could not be found.');
+  let shouldTrigger = comment.parent_comment_id === null;
+  if (comment.parent_comment_id) {
+    const { data: parent, error: parentError } = await db.from('comments')
+      .select('author:profiles!comments_author_id_fkey(account_type)')
+      .eq('id', comment.parent_comment_id)
+      .maybeSingle();
+    if (parentError) throw parentError;
+    const parentAuthor = Array.isArray(parent?.author) ? parent.author[0] : parent?.author;
+    shouldTrigger = parentAuthor?.account_type === 'ai';
+  }
+  if (!shouldTrigger) return;
+  const aiTargetId = comment.parent_comment_id || comment.id;
+  after(async () => {
+    await runFakebookAIForCommentReply({ post_id: postId, comment_id: aiTargetId, content: comment.content });
     revalidatePath('/', 'layout');
   });
-  revalidatePath('/', 'layout');
 }
 export async function react(target: string, reaction: 'like'|'dislike'|'haha') {
   const { db, user } = await human();
