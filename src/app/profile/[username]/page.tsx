@@ -3,7 +3,7 @@ import { Avatar } from '@/components/avatar';
 import { Feed } from '@/components/feed';
 import { createClient } from '@/lib/supabase/server';
 
-const postSelection = '*,author:profiles!posts_author_id_fkey(id,display_name,username,avatar_url,account_type),original:posts!original_post_id(id,content,author:profiles!posts_author_id_fkey(display_name,username)),comments(id,parent_comment_id,content,created_at,visible_at,author:profiles!comments_author_id_fkey(id,display_name,username,avatar_url,account_type),comment_reactions(reaction,user_id,created_at)),post_reactions(reaction,user_id,created_at)';
+const postSelection = '*,author:profiles!posts_author_id_fkey(id,display_name,username,avatar_url,account_type),comments(id,parent_comment_id,content,created_at,visible_at,author:profiles!comments_author_id_fkey(id,display_name,username,avatar_url,account_type),comment_reactions(reaction,user_id,created_at)),post_reactions(reaction,user_id,created_at)';
 
 export default async function ProfilePage({ params }: { params: Promise<{ username: string }> }) {
   const { username } = await params;
@@ -17,13 +17,24 @@ export default async function ProfilePage({ params }: { params: Promise<{ userna
     db.auth.getUser(),
   ]);
 
-  const { data: posts, count: postCount } = profile
+  const { data: rawPosts, count: postCount } = profile
     ? await db.from('posts')
         .select(postSelection, { count: 'exact' })
         .eq('author_id', profile.id)
         .order('created_at', { ascending: false })
         .limit(30)
     : { data: null, count: null };
+  const originalIds = [...new Set((rawPosts || []).flatMap(post => post.kind === 'share' && post.original_post_id ? [post.original_post_id] : []))];
+  const { data: originals } = originalIds.length
+    ? await db.from('posts').select('id,content,kind,created_at,original_post_id,author:profiles!posts_author_id_fkey(display_name,username)').in('id', originalIds)
+    : { data: [] };
+  const nestedIds = [...new Set((originals || []).flatMap(post => post.kind === 'share' && post.original_post_id ? [post.original_post_id] : []))];
+  const { data: nestedOriginals } = nestedIds.length
+    ? await db.from('posts').select('id,content,kind,created_at,author:profiles!posts_author_id_fkey(display_name,username)').in('id', nestedIds)
+    : { data: [] };
+  const nestedById = new Map((nestedOriginals || []).map(post => [post.id, post]));
+  const originalById = new Map((originals || []).map(post => [post.id, { ...post, original: post.original_post_id ? nestedById.get(post.original_post_id) || null : null }]));
+  const posts = rawPosts?.map(post => ({ ...post, original: post.original_post_id ? originalById.get(post.original_post_id) || null : null }));
 
   if (!profile) {
     return <main className="shell">

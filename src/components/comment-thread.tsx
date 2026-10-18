@@ -12,7 +12,7 @@ type Comment = {
   content: string;
   created_at: string;
   comment_reactions?: { reaction: string; user_id: string; created_at: string }[];
-  author: { id: string; display_name: string; username: string; avatar_url?: string | null; account_type: 'human' | 'ai' };
+  author: { id: string; display_name: string; username?: string | null; avatar_url?: string | null; account_type: 'human' | 'ai' };
 };
 
 function ago(date: string) {
@@ -33,33 +33,35 @@ export function CommentThread({ comments, postId, userId }: { comments: Comment[
           <Avatar profile={comment.author}/>
           <div className="comment-content">
             <div className="comment-bubble">
-              <div className="comment-name"><Link href={`/profile/${comment.author.username}`}>{comment.author.display_name}</Link><small>{ago(comment.created_at)}</small></div>
+              <div className="comment-name">{comment.author.username
+                ? <Link href={`/profile/${comment.author.username}`}>{comment.author.display_name}</Link>
+                : <span>{comment.author.display_name || 'Neighbor'}</span>}<small>{ago(comment.created_at)}</small></div>
               <p>{comment.content}</p>
+              <div className="comment-reactions" aria-label="Comment reactions">
+                {(['like', 'dislike', 'haha'] as const).map(reaction => {
+                  const count = comment.comment_reactions?.filter(item => item.reaction === reaction).length || 0;
+                  const active = comment.comment_reactions?.some(item => item.user_id === userId && item.reaction === reaction) || false;
+                  if (!userId && count === 0) return null;
+                  if (!userId) return <span className="comment-reaction-count" key={reaction}>{reactionLabel(reaction)} {count}</span>;
+                  const key = `${comment.id}:${reaction}`;
+                  return <button
+                    className={`comment-react${active ? ' comment-reaction-active' : ''}`}
+                    type="button"
+                    key={reaction}
+                    aria-pressed={active}
+                    disabled={pendingReaction !== null}
+                    onClick={async () => {
+                      if (pendingReaction) return;
+                      setPendingReaction(key);
+                      try { await reactToComment(comment.id, reaction); }
+                      finally { setPendingReaction(null); }
+                    }}
+                  >{pendingReaction === key ? '… ' : ''}{reactionLabel(reaction)} {count > 0 ? count : ''}</button>;
+                })}
+              </div>
             </div>
             {userId && <button className="comment-reply-button" type="button" aria-expanded={replyingTo === comment.id} aria-controls={`reply-form-${comment.id}`} onClick={() => setReplyingTo(replyingTo === comment.id ? null : comment.id)}>↩ Reply</button>}
           </div>
-        </div>
-        <div className="comment-reactions" aria-label="Comment reactions">
-          {(['like', 'dislike', 'haha'] as const).map(reaction => {
-            const count = comment.comment_reactions?.filter(item => item.reaction === reaction).length || 0;
-            const active = comment.comment_reactions?.some(item => item.user_id === userId && item.reaction === reaction) || false;
-            if (!userId && count === 0) return null;
-            if (!userId) return <span className="comment-reaction-count" key={reaction}>{reactionLabel(reaction)} {count}</span>;
-            const key = `${comment.id}:${reaction}`;
-            return <button
-              className={`comment-react${active ? ' comment-reaction-active' : ''}`}
-              type="button"
-              key={reaction}
-              aria-pressed={active}
-              disabled={pendingReaction !== null}
-              onClick={async () => {
-                if (pendingReaction) return;
-                setPendingReaction(key);
-                try { await reactToComment(comment.id, reaction); }
-                finally { setPendingReaction(null); }
-              }}
-            >{pendingReaction === key ? '… ' : ''}{reactionLabel(reaction)} {count > 0 ? count : ''}</button>;
-          })}
         </div>
         {replyingTo === comment.id && userId && <form id={`reply-form-${comment.id}`} action={addComment} className="comment-form reply-form"><input type="hidden" name="post_id" value={postId}/><input type="hidden" name="parent_comment_id" value={comment.id}/><input name="content" placeholder={`Reply to ${comment.author.display_name}…`} maxLength={1000} required autoFocus/><SubmitButton className="reply-submit" pendingLabel="Sending...">Send reply</SubmitButton></form>}
         {depth < 8 && render(comment.id, depth + 1)}

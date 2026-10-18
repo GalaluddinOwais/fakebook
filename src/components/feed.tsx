@@ -9,7 +9,8 @@ import { CommentThread } from '@/components/comment-thread';
 import { PostMenu } from '@/components/post-menu';
 import { SubmitButton } from '@/components/submit-button';
 
-type Profile = { id: string; display_name: string; username: string; avatar_url?: string | null; account_type: 'human' | 'ai' };
+type Profile = { id: string; display_name: string; username?: string | null; avatar_url?: string | null; account_type: 'human' | 'ai' };
+type Relation<T> = T | T[] | null | undefined;
 type ReactionCounts = { likes: number; dislikes: number; haha: number };
 type PostReaction = { reaction: string; user_id: string; created_at: string };
 type CommentReaction = { reaction: string; user_id: string; created_at: string };
@@ -19,23 +20,24 @@ type FeedComment = {
   content: string;
   created_at: string;
   visible_at: string | null;
-  author: Profile;
+  author: Relation<Profile>;
   comment_reactions?: CommentReaction[];
 };
 type FeedPost = {
   id: string;
+  author_id: string;
   content: string;
   kind: 'original' | 'share';
   original_post_id: string | null;
   created_at: string;
-  author: Profile;
+  author: Relation<Profile>;
   ai_likes_decided?: number;
   ai_dislikes_decided?: number;
   ai_haha_decided?: number;
   ai_likes_shown?: number;
   ai_dislikes_shown?: number;
   ai_haha_shown?: number;
-  original?: { id: string; content: string; author: { display_name: string; username: string } };
+  original?: Relation<{ id: string; content: string; kind: 'original' | 'share'; created_at: string; author: Relation<{ display_name: string; username?: string | null }>; original?: Relation<{ id: string; content: string; kind: 'original' | 'share'; created_at: string; author: Relation<{ display_name: string; username?: string | null }> }> }>;
   comments: FeedComment[];
   post_reactions: PostReaction[];
 };
@@ -43,6 +45,14 @@ type FeedPost = {
 function ago(date: string) {
   const mins = Math.max(1, Math.floor((Date.now() - new Date(date).getTime()) / 60000));
   return mins < 60 ? `${mins}m ago` : mins < 1440 ? `${Math.floor(mins / 60)}h ago` : `${Math.floor(mins / 1440)}d ago`;
+}
+
+function one<T>(value: Relation<T>): T | undefined {
+  return Array.isArray(value) ? value[0] : value ?? undefined;
+}
+
+function fallbackProfile(id = ''): Profile {
+  return { id, display_name: 'Neighbor', username: null, account_type: 'human' };
 }
 
 export function Feed({ posts, userId }: { posts: FeedPost[]; userId: string | null }) {
@@ -100,8 +110,8 @@ export function Feed({ posts, userId }: { posts: FeedPost[]; userId: string | nu
   }).map(post => post.id).join(',');
 
   const hasRecentHumanActivity = posts.some(post =>
-    (post.author.account_type === 'human' && now - new Date(post.created_at).getTime() < 120_000)
-    || post.comments?.some(comment => comment.author.account_type === 'human' && now - new Date(comment.created_at).getTime() < 120_000),
+    (one(post.author)?.account_type === 'human' && now - new Date(post.created_at).getTime() < 120_000)
+    || post.comments?.some(comment => one(comment.author)?.account_type === 'human' && now - new Date(comment.created_at).getTime() < 120_000),
   );
 
   useEffect(() => {
@@ -153,6 +163,15 @@ export function Feed({ posts, userId }: { posts: FeedPost[]; userId: string | nu
     {posts.map(post => {
       const visibleReactions = post.post_reactions?.filter(reaction => new Date(reaction.created_at).getTime() <= now) || [];
       const visibleComments = post.comments?.filter(comment => new Date(comment.visible_at || comment.created_at).getTime() <= now) || [];
+      const postAuthor = one(post.author) || fallbackProfile(post.author_id);
+      const original = one(post.original);
+      const originalAuthor = one(original?.author);
+      const nestedOriginal = one(original?.original);
+      const nestedAuthor = one(nestedOriginal?.author);
+      const threadComments = visibleComments.map(comment => ({
+        ...comment,
+        author: one(comment.author) || fallbackProfile(),
+      }));
       const myReaction = visibleReactions.find(reaction => reaction.user_id === userId)?.reaction;
       const saved = aiCounts[post.id] || {
         likes: post.ai_likes_shown || 0,
@@ -167,20 +186,33 @@ export function Feed({ posts, userId }: { posts: FeedPost[]; userId: string | nu
 
       return <article id={`post-${post.id}`} className="post-card" key={post.id}>
         <div className="post-head">
-          <Link href={`/profile/${post.author.username}`}><Avatar profile={post.author}/></Link>
+          {postAuthor.username
+            ? <Link href={`/profile/${postAuthor.username}`}><Avatar profile={postAuthor}/></Link>
+            : <Avatar profile={postAuthor}/>}
           <div className="author">
-            <div><Link href={`/profile/${post.author.username}`} className="name">{post.author.display_name}</Link></div>
+            <div>{postAuthor.username
+              ? <Link href={`/profile/${postAuthor.username}`} className="name">{postAuthor.display_name}</Link>
+              : <span className="name">{postAuthor.display_name}</span>}</div>
             <small>{ago(post.created_at)}{post.kind === 'share' && ' · shared'}</small>
           </div>
-          <PostMenu postId={post.id} canDelete={userId === post.author.id}/>
+          <PostMenu postId={post.id} canDelete={!!userId && userId === postAuthor.id}/>
         </div>
 
         {post.kind === 'share' && <p className="share-caption">{post.content || 'Shared a post'}</p>}
-        <div className={post.kind === 'share' ? 'shared-box' : 'post-content'}>
-          {post.kind === 'share' && post.original && <>
-            <div className="shared-by">Originally by <Link href={`/profile/${post.original.author.username}`}>{post.original.author.display_name}</Link></div>
-            <p>{post.original.content}</p>
+        <div className={post.kind === 'share' ? `shared-box${original?.kind === 'share' ? ' nested-share' : ''}` : 'post-content'}>
+          {post.kind === 'share' && original && <>
+            <div className="shared-by">{original.kind === 'share' ? 'Shared by ' : 'Originally by '}{originalAuthor?.username
+              ? <Link href={`/profile/${originalAuthor.username}`}>{originalAuthor.display_name}</Link>
+              : originalAuthor?.display_name || 'a neighbor'}{original.kind === 'share' && <small> · {ago(original.created_at)}</small>}</div>
+            <p>{original.kind === 'share' ? original.content || 'Shared a post' : original.content}</p>
+            {original.kind === 'share' && nestedOriginal && <div className="shared-box nested-original">
+              <div className="shared-by">Originally by {nestedAuthor?.username
+                ? <Link href={`/profile/${nestedAuthor.username}`}>{nestedAuthor.display_name}</Link>
+                : nestedAuthor?.display_name || 'a neighbor'}</div>
+              <p>{nestedOriginal.content}</p>
+            </div>}
           </>}
+          {post.kind === 'share' && !original && <p>This shared post is no longer available.</p>}
           {post.kind === 'original' && <p>{post.content}</p>}
         </div>
 
@@ -206,7 +238,7 @@ export function Feed({ posts, userId }: { posts: FeedPost[]; userId: string | nu
         </div>
 
         {expanded === post.id && <div className="comments">
-          <CommentThread comments={visibleComments} postId={post.id} userId={userId}/>
+          <CommentThread comments={threadComments} postId={post.id} userId={userId}/>
           {userId
             ? <form action={addComment} className="comment-form">
                 <input type="hidden" name="post_id" value={post.id}/>

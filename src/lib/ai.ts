@@ -64,17 +64,25 @@ export async function runFakebookAIForHumanEvent(event: Event) {
   if (claimError || claim !== true) return;
   try {
     const [{ data: post }, { data: profiles }, { data: comments }, { data: memory }] = await Promise.all([
-      db.from('posts').select('id,content,created_at,kind,original_post_id,author:profiles(display_name,username),original:posts!original_post_id(content,author:profiles(display_name,username))').eq('id', event.post_id).single(),
+      db.from('posts').select('id,content,created_at,kind,original_post_id,author:profiles(display_name,username)').eq('id', event.post_id).single(),
       db.from('profiles').select('id,display_name,username,bio,personality,writing_style').eq('account_type','ai').limit(15),
       db.from('comments').select('id,content,author:profiles(display_name,username,account_type)').eq('post_id', event.post_id).order('created_at',{ascending:false}).limit(Math.max(1,Math.min(6,Number(process.env.AI_MAX_RECENT_COMMENTS||6)))),
       db.from('thread_memories').select('summary').eq('thread_id', event.post_id).maybeSingle(),
     ]);
     const shareAuthor = singleRelation(post?.author);
-    const originalPost = singleRelation(post?.original);
-    const originalAuthor = singleRelation(originalPost?.author);
-    const postText = post?.kind === 'share'
-      ? `Share by ${shareAuthor?.display_name || 'a neighbor'}: ${post.content || '(no caption)'}\nOriginal post by ${originalAuthor?.display_name || 'a neighbor'}: ${originalPost?.content || ''}`
-      : post?.content || event.content;
+    const { data: sharedPost } = post?.kind === 'share' && post.original_post_id
+      ? await db.from('posts').select('id,content,kind,original_post_id,author:profiles(display_name,username)').eq('id', post.original_post_id).maybeSingle()
+      : { data: null };
+    const sharedAuthor = singleRelation(sharedPost?.author);
+    const { data: sharedPostOriginal } = sharedPost?.kind === 'share' && sharedPost.original_post_id
+      ? await db.from('posts').select('content,author:profiles(display_name,username)').eq('id', sharedPost.original_post_id).maybeSingle()
+      : { data: null };
+    const sharedOriginalAuthor = singleRelation(sharedPostOriginal?.author);
+    const contextParts: string[] = [];
+    if (post?.kind === 'share') contextParts.push(`Newest share by ${shareAuthor?.display_name || 'a neighbor'}: ${post.content || '(no caption)'}`);
+    if (sharedPost) contextParts.push(`${sharedPost.kind === 'share' ? 'Shared post' : 'Original post'} by ${sharedAuthor?.display_name || 'a neighbor'}: ${sharedPost.content || '(no caption)'}`);
+    if (sharedPost?.kind === 'share') contextParts.push(`Original post by ${sharedOriginalAuthor?.display_name || 'a neighbor'}: ${sharedPostOriginal?.content || '(unavailable)'}`);
+    const postText = post?.kind === 'share' ? contextParts.join('\n') : post?.content || event.content;
     const prompt = `Decide how this new post should get reactions and comments. Return only this JSON shape: {"thread_summary":"short memory","likes":0,"dislikes":0,"haha":0,"comments":["comment text"]}. Choose each reaction count independently from 0 to 10000. Generate 5 to 20 comments when the post supports it, use fewer only when needed, and never exceed 20. Keep each comment concise and use distinct voices. Make at least one total action. Do not include profile IDs or action objects; the app assigns fictional AI profiles.\nPost: ${postText}\nRecent comments: ${JSON.stringify(comments)}\nShared thread memory: ${memory?.summary || ''}`;
     const provider: AIProvider = new GeminiProvider();
     const parsed = BatchOutput.safeParse(JSON.parse(await provider.generateStructuredJSON(prompt)));

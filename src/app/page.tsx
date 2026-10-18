@@ -6,10 +6,21 @@ import { SubmitButton } from '@/components/submit-button';
 
 export default async function Home() {
   const db = await createClient(); const { data: { user } } = await db.auth.getUser();
-  const [{ data: profile }, { data: posts, error }] = await Promise.all([
+  const [{ data: profile }, { data: rawPosts, error }] = await Promise.all([
     user ? db.from('profiles').select('*').eq('id',user.id).maybeSingle() : Promise.resolve({data:null}),
-    db.from('posts').select('*,author:profiles!posts_author_id_fkey(id,display_name,username,avatar_url,account_type),original:posts!original_post_id(id,content,author:profiles!posts_author_id_fkey(display_name,username)),comments(id,parent_comment_id,content,created_at,visible_at,author:profiles!comments_author_id_fkey(id,display_name,username,avatar_url,account_type),comment_reactions(reaction,user_id,created_at)),post_reactions(reaction,user_id,created_at)').order('created_at',{ascending:false}).limit(30),
+    db.from('posts').select('*,author:profiles!posts_author_id_fkey(id,display_name,username,avatar_url,account_type),comments(id,parent_comment_id,content,created_at,visible_at,author:profiles!comments_author_id_fkey(id,display_name,username,avatar_url,account_type),comment_reactions(reaction,user_id,created_at)),post_reactions(reaction,user_id,created_at)').order('created_at',{ascending:false}).limit(30),
   ]);
+  const originalIds = [...new Set((rawPosts || []).flatMap(post => post.kind === 'share' && post.original_post_id ? [post.original_post_id] : []))];
+  const { data: originals } = originalIds.length
+    ? await db.from('posts').select('id,content,kind,created_at,original_post_id,author:profiles!posts_author_id_fkey(display_name,username)').in('id', originalIds)
+    : { data: [] };
+  const nestedIds = [...new Set((originals || []).flatMap(post => post.kind === 'share' && post.original_post_id ? [post.original_post_id] : []))];
+  const { data: nestedOriginals } = nestedIds.length
+    ? await db.from('posts').select('id,content,kind,created_at,author:profiles!posts_author_id_fkey(display_name,username)').in('id', nestedIds)
+    : { data: [] };
+  const nestedById = new Map((nestedOriginals || []).map(post => [post.id, post]));
+  const originalById = new Map((originals || []).map(post => [post.id, { ...post, original: post.original_post_id ? nestedById.get(post.original_post_id) || null : null }]));
+  const posts = rawPosts?.map(post => ({ ...post, original: post.original_post_id ? originalById.get(post.original_post_id) || null : null }));
   return <main className="shell">
     <header className="topbar"><Link className="brand" href="/">fakebook<span>✳</span></Link><div className="top-actions">{user ? <><Link href={`/profile/${profile?.username || ''}`} className="profile-link">{profile?.display_name || 'Your profile'}</Link><form action={async()=>{'use server'; const c=await createClient(); await c.auth.signOut();}}><button className="quiet">Log out</button></form></> : <Link className="button small" href="/auth?mode=login">Log in</Link>}</div></header>
     <section className="intro"><div><p className="eyebrow">A little corner of the internet</p><h1>Good things happen<br/>when we <em>show up.</em></h1><p className="subhead">A small social network for human moments and friendly faces.</p></div><div className="intro-mark">f<span>✳</span></div></section>

@@ -29,9 +29,8 @@ export async function sharePost(form: FormData) {
     .eq('id', source_post_id)
     .maybeSingle();
   if (sourceError || !source) throw new Error('The post you are sharing could not be found.');
-  const original_post_id = source.kind === 'share' && source.original_post_id
-    ? source.original_post_id
-    : source.id;
+  // Keep the exact post that was shared. This allows a share to quote another share.
+  const original_post_id = source.id;
   const { data: share, error } = await db.from('posts')
     .insert({ author_id: user.id, kind: 'share', original_post_id, content })
     .select('id')
