@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState } from 'react';
 import Link from 'next/link';
@@ -56,14 +56,14 @@ export function CommentThread({ comments, postId, userId }: { comments: Comment[
                       try { await reactToComment(comment.id, reaction); }
                       finally { setPendingReaction(null); }
                     }}
-                  >{pendingReaction === key ? '… ' : ''}{reactionLabel(reaction)} {count > 0 ? count : ''}</button>;
+                  >{pendingReaction === key ? 'â€¦ ' : ''}{reactionLabel(reaction)} {count > 0 ? count : ''}</button>;
                 })}
               </div>
             </div>
-            {userId && <button className="comment-reply-button" type="button" aria-expanded={replyingTo === comment.id} aria-controls={`reply-form-${comment.id}`} onClick={() => setReplyingTo(replyingTo === comment.id ? null : comment.id)}>↩ Reply</button>}
           </div>
         </div>
-        {replyingTo === comment.id && userId && <form id={`reply-form-${comment.id}`} action={addComment} className="comment-form reply-form"><input type="hidden" name="post_id" value={postId}/><input type="hidden" name="parent_comment_id" value={comment.id}/><input name="content" placeholder={`Reply to ${comment.author.display_name}…`} maxLength={1000} required autoFocus/><SubmitButton className="reply-submit" pendingLabel="Sending...">Send reply</SubmitButton></form>}
+        {userId && <button className="comment-reply-button" type="button" aria-expanded={replyingTo === comment.id} aria-controls={`reply-form-${comment.id}`} onClick={() => setReplyingTo(replyingTo === comment.id ? null : comment.id)}>Reply</button>}
+        {replyingTo === comment.id && userId && <form id={`reply-form-${comment.id}`} action={addComment} className="comment-form reply-form"><input type="hidden" name="post_id" value={postId}/><input type="hidden" name="parent_comment_id" value={comment.id}/><input name="content" placeholder={`Reply to ${comment.author.display_name}â€¦`} maxLength={1000} required autoFocus/><SubmitButton className="reply-submit" pendingLabel="Sending...">Send reply</SubmitButton></form>}
         {depth < 8 && render(comment.id, depth + 1)}
       </div>
     ));

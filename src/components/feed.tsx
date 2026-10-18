@@ -37,6 +37,7 @@ type FeedPost = {
   ai_likes_shown?: number;
   ai_dislikes_shown?: number;
   ai_haha_shown?: number;
+  ai_reactions_reveal_steps?: number;
   original?: Relation<{ id: string; content: string; kind: 'original' | 'share'; created_at: string; author: Relation<{ display_name: string; username?: string | null }>; original?: Relation<{ id: string; content: string; kind: 'original' | 'share'; created_at: string; author: Relation<{ display_name: string; username?: string | null }> }> }>;
   comments: FeedComment[];
   post_reactions: PostReaction[];
@@ -109,13 +110,33 @@ export function Feed({ posts, userId }: { posts: FeedPost[]; userId: string | nu
       || counts.haha < (post.ai_haha_decided || 0);
   }).map(post => post.id).join(',');
 
-  const hasRecentHumanActivity = posts.some(post =>
-    (one(post.author)?.account_type === 'human' && now - new Date(post.created_at).getTime() < 120_000)
-    || post.comments?.some(comment => one(comment.author)?.account_type === 'human' && now - new Date(comment.created_at).getTime() < 120_000),
-  );
+  const waitingForAIContent = posts.some(post => {
+    const recentHumanPost = one(post.author)?.account_type === 'human'
+      && now - new Date(post.created_at).getTime() < 120_000;
+    const aiTopLevelComments = post.comments?.filter(comment =>
+      comment.parent_comment_id === null && one(comment.author)?.account_type === 'ai',
+    ) || [];
+    const expectedAIComments = post.ai_reactions_reveal_steps ?? 10;
+    if (recentHumanPost && aiTopLevelComments.length < expectedAIComments) return true;
+
+    const commentsById = new Map((post.comments || []).map(comment => [comment.id, comment]));
+    return (post.comments || []).some(comment => {
+      if (one(comment.author)?.account_type !== 'human' || now - new Date(comment.created_at).getTime() >= 120_000) return false;
+      const parent = comment.parent_comment_id ? commentsById.get(comment.parent_comment_id) : null;
+      const responseParentId = comment.parent_comment_id && one(parent?.author)?.account_type === 'ai'
+        ? comment.parent_comment_id
+        : comment.parent_comment_id ? null : comment.id;
+      if (!responseParentId) return false;
+      return !(post.comments || []).some(reply =>
+        reply.parent_comment_id === responseParentId
+        && one(reply.author)?.account_type === 'ai'
+        && new Date(reply.created_at).getTime() > new Date(comment.created_at).getTime(),
+      );
+    });
+  });
 
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
+    const timer = setInterval(() => setNow(Date.now()), 60_000);
     return () => clearInterval(timer);
   }, []);
 
@@ -124,11 +145,11 @@ export function Feed({ posts, userId }: { posts: FeedPost[]; userId: string | nu
     if (!ids.length) return;
     let active = true;
     const tick = async () => {
-      const rows = await Promise.all(ids.map(async id => {
-        try { return { id, counts: await advancePostReactionCounts(id) }; }
-        catch { return null; }
-      }));
+      let rows;
+      try { rows = await advancePostReactionCounts(ids); }
+      catch { return; }
       if (!active) return;
+      if (!Array.isArray(rows)) rows = rows ? [{ id: ids[0], counts: rows }] : [];
       setAiCounts(current => {
         const next = { ...current };
         for (const row of rows) {
@@ -144,20 +165,20 @@ export function Feed({ posts, userId }: { posts: FeedPost[]; userId: string | nu
       });
     };
     void tick();
-    const timer = setInterval(() => void tick(), 2000);
+    const timer = setInterval(() => void tick(), 60_000);
     return () => { active = false; clearInterval(timer); };
   }, [batchKey]);
 
   useEffect(() => {
-    if (!hasRecentHumanActivity) return;
+    if (!waitingForAIContent) return;
     let ticks = 0;
     const timer = setInterval(() => {
       router.refresh();
       ticks += 1;
       if (ticks >= 60) clearInterval(timer);
-    }, 2000);
+    }, 60_000);
     return () => clearInterval(timer);
-  }, [hasRecentHumanActivity, router]);
+  }, [waitingForAIContent, router]);
 
   return <div className="posts">
     {posts.map(post => {

@@ -12,7 +12,6 @@ export default async function ProfilePage({ params }: { params: Promise<{ userna
     db.from('profiles')
       .select('id,username,display_name,bio,avatar_url,account_type,created_at')
       .eq('username', username)
-      .eq('account_type', 'human')
       .maybeSingle(),
     db.auth.getUser(),
   ]);
@@ -59,7 +58,7 @@ export default async function ProfilePage({ params }: { params: Promise<{ userna
     </header>
 
     <section className="profile-hero">
-      <Avatar profile={profile}/>
+      <Avatar profile={profile} className="big"/>
       <div className="profile-details">
         <p className="eyebrow">NEIGHBOR PROFILE</p>
         <h1>{profile.display_name}</h1>

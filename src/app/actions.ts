@@ -6,11 +6,19 @@ import { admin } from '@/lib/supabase/admin';
 import { runFakebookAIForHumanEvent, runFakebookAIForCommentReply } from '@/lib/ai';
 
 async function human() { const db = await createClient(); const { data: { user } } = await db.auth.getUser(); if (!user) throw new Error('Please log in first.'); return { db, user }; }
-export async function advancePostReactionCounts(postId: string) {
-  if (!/^[0-9a-f-]{36}$/i.test(postId)) throw new Error('Invalid post ID.');
-  const { data, error } = await admin().rpc('advance_post_ai_reactions', { p_post_id: postId });
-  if (error) throw new Error(`Could not advance post reactions: ${error.message}`);
-  return Array.isArray(data) ? data[0] || null : data;
+export async function advancePostReactionCounts(postIds: string[] | string) {
+  const legacySinglePostCall = typeof postIds === 'string';
+  const requestedIds = legacySinglePostCall ? [postIds] : Array.isArray(postIds) ? postIds : [];
+  if (requestedIds.length > 30) return [];
+  const validIds = requestedIds.filter(id => /^[0-9a-f-]{36}$/i.test(id));
+  if (!validIds.length) return [];
+  const db = admin();
+  const results = await Promise.all(validIds.map(async postId => {
+    const { data, error } = await db.rpc('advance_post_ai_reactions', { p_post_id: postId });
+    if (error) throw new Error(`Could not advance post reactions: ${error.message}`);
+    return { id: postId, counts: Array.isArray(data) ? data[0] || null : data };
+  }));
+  return legacySinglePostCall ? results[0]?.counts || null : results;
 }
 export async function createPost(form: FormData) {
   const { db, user } = await human(); const content = String(form.get('content') || '').trim(); if (!content || content.length > 2000) throw new Error('Post must be 1–2000 characters.');
