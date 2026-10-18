@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import { useState } from 'react';
+import { useOptimistic, useState } from 'react';
 import Link from 'next/link';
 import { addComment, reactToComment } from '@/app/actions';
 import { SubmitButton } from '@/components/submit-button';
@@ -11,6 +11,7 @@ type Comment = {
   parent_comment_id: string | null;
   content: string;
   created_at: string;
+  visible_at?: string | null;
   comment_reactions?: { reaction: string; user_id: string; created_at: string }[];
   author: { id: string; display_name: string; username?: string | null; avatar_url?: string | null; account_type: 'human' | 'ai' };
 };
@@ -23,8 +24,12 @@ function ago(date: string) {
 export function CommentThread({ comments, postId, userId }: { comments: Comment[]; postId: string; userId: string | null }) {
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [pendingReaction, setPendingReaction] = useState<string | null>(null);
+  const [visibleComments, addOptimisticComment] = useOptimistic(
+    comments,
+    (current, next: Comment) => [...current, next],
+  );
   const byParent = new Map<string | null, Comment[]>();
-  for (const comment of [...comments].sort((a, b) => a.created_at.localeCompare(b.created_at))) byParent.set(comment.parent_comment_id, [...(byParent.get(comment.parent_comment_id) || []), comment]);
+  for (const comment of [...visibleComments].sort((a, b) => a.created_at.localeCompare(b.created_at))) byParent.set(comment.parent_comment_id, [...(byParent.get(comment.parent_comment_id) || []), comment]);
 
   function render(parentId: string | null, depth = 0): React.ReactNode {
     return (byParent.get(parentId) || []).map(comment => (
@@ -63,7 +68,19 @@ export function CommentThread({ comments, postId, userId }: { comments: Comment[
           </div>
         </div>
         {userId && <button className="comment-reply-button" type="button" aria-expanded={replyingTo === comment.id} aria-controls={`reply-form-${comment.id}`} onClick={() => setReplyingTo(replyingTo === comment.id ? null : comment.id)}>Reply</button>}
-        {replyingTo === comment.id && userId && <form id={`reply-form-${comment.id}`} action={addComment} className="comment-form reply-form"><input type="hidden" name="post_id" value={postId}/><input type="hidden" name="parent_comment_id" value={comment.id}/><input name="content" placeholder={`Reply to ${comment.author.display_name}â€¦`} maxLength={1000} required autoFocus/><SubmitButton className="reply-submit" pendingLabel="Sending...">Send reply</SubmitButton></form>}
+        {replyingTo === comment.id && userId && <form id={`reply-form-${comment.id}`} action={async formData => {
+          const content = String(formData.get('content') || '').trim();
+          addOptimisticComment({
+            id: `optimistic-${Date.now()}-${Math.random()}`,
+            parent_comment_id: comment.id,
+            content,
+            created_at: new Date().toISOString(),
+            visible_at: new Date().toISOString(),
+            author: { id: userId, display_name: 'You', account_type: 'human' },
+            comment_reactions: [],
+          });
+          await addComment(formData);
+        }} className="comment-form reply-form"><input type="hidden" name="post_id" value={postId}/><input type="hidden" name="parent_comment_id" value={comment.id}/><input name="content" placeholder={`Reply to ${comment.author.display_name}`} maxLength={1000} required autoFocus/><SubmitButton className="reply-submit" pendingLabel="Sending...">Send reply</SubmitButton></form>}
         {depth < 8 && render(comment.id, depth + 1)}
       </div>
     ));
