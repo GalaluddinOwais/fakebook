@@ -97,7 +97,7 @@ export async function runFakebookAIForHumanEvent(event: Event) {
   }
 }
 
-/** A human reply gets one AI response nested under the comment being replied to. */
+/** Human top-level comments get 1-5 distinct AI replies; replies to AI comments get one response. */
 export async function runFakebookAIForCommentReply(event: { post_id: string; comment_id: string; content: string }) {
   if (process.env.AI_ENABLED === 'false' || !process.env.GEMINI_API_KEY) return;
   const db = admin();
@@ -109,13 +109,22 @@ export async function runFakebookAIForCommentReply(event: { post_id: string; com
       db.from('profiles').select('id,display_name,username,personality,writing_style').eq('account_type', 'ai').limit(15),
     ]);
     if (!post || !target || !profiles?.length) return;
-    const profile = profiles[Math.floor(Math.random() * profiles.length)];
-    const prompt = `You are ${profile.display_name}, an AI neighbor. ${profile.personality || ''} Write one natural, concise reply to the target comment. The human just replied to it, so respond to their reply while keeping the conversation context. Return only JSON: {"reply":"..."}. Do not write another top-level comment.\nPost: ${post.content}\nTarget comment by ${target.author?.[0]?.display_name || 'neighbor'}: ${target.content}\nHuman reply: ${event.content}\nRecent thread context: ${JSON.stringify(context || [])}`;
+    const isHumanTopLevelComment = target.parent_comment_id === null && target.author?.[0]?.account_type === 'human';
+    const candidates = [...profiles].sort(() => Math.random() - 0.5).slice(0, isHumanTopLevelComment ? 5 : 1);
+    const prompt = isHumanTopLevelComment
+      ? `Write between 1 and ${candidates.length} natural, concise replies to the human's top-level comment. Pick a number that fits the comment. Each reply should sound like a different AI neighbor from this list, and the app will assign them in the same order. Do not make up profile names, add labels, or write another top-level comment. Return only JSON: {"replies":["...", "..."]}. Each reply must be distinct, relevant, and at most 500 characters.\nPost: ${post.content}\nHuman comment by ${target.author?.[0]?.display_name || 'neighbor'}: ${target.content}\nAI neighbors, in assignment order: ${JSON.stringify(candidates.map(profile => ({ display_name: profile.display_name, personality: profile.personality, writing_style: profile.writing_style })))}\nRecent thread context: ${JSON.stringify(context || [])}`
+      : `You are ${candidates[0].display_name}, an AI neighbor. ${candidates[0].personality || ''} Write one natural, concise reply to the target AI comment. The human just replied to it, so respond to the human's reply while keeping the conversation context. Return only JSON: {"replies":["..."]}. Do not write another top-level comment.\nPost: ${post.content}\nTarget AI comment: ${target.content}\nHuman reply: ${event.content}\nRecent thread context: ${JSON.stringify(context || [])}`;
     const provider: AIProvider = new GeminiProvider();
-    const parsed = z.object({ reply: z.string().trim().min(1).max(500) }).safeParse(JSON.parse(await provider.generateStructuredJSON(prompt)));
-    if (!parsed.success) throw new Error('Gemini returned an invalid comment reply.');
-    const { error } = await db.from('comments').insert({ post_id: event.post_id, author_id: profile.id, parent_comment_id: event.comment_id, content: parsed.data.reply });
-    if (error) throw new Error(`Could not save AI comment reply: ${error.message}`);
+    const parsed = z.object({ replies: z.array(z.string().trim().min(1).max(500)).min(1).max(candidates.length) }).safeParse(JSON.parse(await provider.generateStructuredJSON(prompt)));
+    if (!parsed.success) throw new Error('Gemini returned invalid comment replies.');
+    const replies = parsed.data.replies.map((content, index) => ({
+      post_id: event.post_id,
+      author_id: candidates[index].id,
+      parent_comment_id: target.id,
+      content,
+    }));
+    const { error } = await db.from('comments').insert(replies);
+    if (error) throw new Error(`Could not save AI comment replies: ${error.message}`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Fakebook AI comment reply failed: ${message}`);

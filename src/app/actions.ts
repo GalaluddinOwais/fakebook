@@ -33,8 +33,8 @@ export async function addComment(form: FormData) {
   }
   const { data, error } = await db.from('comments').insert({ post_id, author_id: user.id, parent_comment_id, content }).select('id').single();
   if (error) throw error;
-  if (parent_comment_id && replyingToAI) after(async () => {
-    await runFakebookAIForCommentReply({ post_id, comment_id: parent_comment_id, content });
+  if (!parent_comment_id || replyingToAI) after(async () => {
+    await runFakebookAIForCommentReply({ post_id, comment_id: parent_comment_id || data.id, content });
     revalidatePath('/', 'layout');
   });
   revalidatePath('/', 'layout');
