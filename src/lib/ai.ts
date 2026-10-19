@@ -119,20 +119,41 @@ export async function runFakebookAIForCommentReply(event: { post_id: string; com
   if (process.env.AI_ENABLED === 'false' || !process.env.GEMINI_API_KEY) return [];
   const db = admin();
   try {
-    const [{ data: post }, { data: target }, { data: context }, { data: profiles }] = await Promise.all([
+    const [{ data: post }, { data: target }, { data: threadComments }, { data: profiles }] = await Promise.all([
       db.from('posts').select('id,content,kind,original_post_id,author:profiles(display_name,username)').eq('id', event.post_id).maybeSingle(),
       db.from('comments').select('id,content,parent_comment_id,author:profiles(display_name,username,account_type)').eq('id', event.comment_id).eq('post_id', event.post_id).maybeSingle(),
-      db.from('comments').select('content,parent_comment_id,author:profiles(display_name,username,account_type)').eq('post_id', event.post_id).order('created_at', { ascending: false }).limit(12),
+      db.from('comments').select('id,content,parent_comment_id,author:profiles(display_name,account_type)').eq('post_id', event.post_id).order('created_at', { ascending: true }).limit(500),
       db.from('profiles').select('id,display_name,username,personality,writing_style').eq('account_type', 'ai').limit(15),
     ]);
     if (!post || !target || !profiles?.length) return [];
     const targetAuthor = singleRelation(target.author);
     const isHumanTopLevelComment = target.parent_comment_id === null && targetAuthor?.account_type === 'human';
+    const threadById = new Map((threadComments || []).map(comment => [comment.id, comment]));
+    const parentComment = target.parent_comment_id ? threadById.get(target.parent_comment_id) : null;
+    const isHumanReplyToAI = !!target.parent_comment_id
+      && targetAuthor?.account_type === 'human'
+      && singleRelation(parentComment?.author)?.account_type === 'ai';
+    if (!isHumanTopLevelComment && !isHumanReplyToAI) return [];
+    const { data: context } = isHumanTopLevelComment
+      ? await db.from('comments').select('content,parent_comment_id,author:profiles(display_name,username,account_type)').eq('post_id', event.post_id).order('created_at', { ascending: false }).limit(12)
+      : { data: [] };
+    const thread: { author: string; content: string }[] = [];
+    if (isHumanReplyToAI) {
+      let currentId: string | null = target.id;
+      while (currentId && thread.length < 32) {
+        const current = threadById.get(currentId);
+        if (!current) break;
+        const author = singleRelation(current.author);
+        thread.push({ author: author?.display_name || 'neighbor', content: current.content });
+        currentId = current.parent_comment_id;
+      }
+      thread.reverse();
+    }
     const replyCount = isHumanTopLevelComment ? 1 + Math.floor(Math.random() * Math.min(5, profiles.length)) : 1;
     const candidates = [...profiles].sort(() => Math.random() - 0.5).slice(0, replyCount);
     const prompt = isHumanTopLevelComment
       ? `Write exactly ${replyCount} natural, concise replies to the human's top-level comment. Each reply should sound like a different AI neighbor from this list, and the app will assign them in the same order. Do not make up profile names, add labels, or write another top-level comment. Return only JSON: {"replies":["...", "..."]}. Each reply must be distinct, relevant, and at most 500 characters.\nPost: ${post.content}\nHuman comment by ${targetAuthor?.display_name || 'neighbor'}: ${target.content}\nAI neighbors, in assignment order: ${JSON.stringify(candidates.map(profile => ({ display_name: profile.display_name, personality: profile.personality, writing_style: profile.writing_style })))}\nRecent thread context: ${JSON.stringify(context || [])}`
-      : `You are ${candidates[0].display_name}, an AI neighbor. ${candidates[0].personality || ''} Write one natural, concise reply to the target AI comment. The human just replied to it, so respond to the human's reply while keeping the conversation context. Return only JSON: {"replies":["..."]}. Do not write another top-level comment.\nPost: ${post.content}\nTarget AI comment: ${target.content}\nHuman reply: ${event.content}\nRecent thread context: ${JSON.stringify(context || [])}`;
+      : `You are ${candidates[0].display_name}, an AI neighbor. ${candidates[0].personality || ''} Write one natural, concise next reply in this thread. Reply directly to the last message. Return only JSON: {"replies":["..."]}. Do not start a new top-level comment.\nPost: ${post.content}\nThread from oldest to newest: ${JSON.stringify(thread)}`;
     const provider: AIProvider = new GeminiProvider();
     const parsed = z.object({ replies: z.array(z.string().trim().min(1).max(500)).length(replyCount) }).safeParse(JSON.parse(await provider.generateStructuredJSON(prompt)));
     if (!parsed.success) throw new Error('Gemini returned invalid comment replies.');

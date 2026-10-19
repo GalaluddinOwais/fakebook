@@ -91,7 +91,7 @@ export async function addComment(form: FormData) {
   if (error) throw error;
   revalidatePath('/', 'layout');
   const shouldTriggerAI = !parent_comment_id || replyingToAI;
-  return { comment: data, shouldTriggerAI, aiTargetId: shouldTriggerAI ? (replyingToAI ? parent_comment_id : data.id) : null };
+  return { comment: data, shouldTriggerAI, aiTargetId: shouldTriggerAI ? data.id : null };
 }
 export async function triggerCommentAI(postId: string, commentId: string) {
   const { db, user } = await human();
@@ -114,8 +114,7 @@ export async function triggerCommentAI(postId: string, commentId: string) {
     shouldTrigger = parentAuthor?.account_type === 'ai';
   }
   if (!shouldTrigger) return;
-  const aiTargetId = comment.parent_comment_id || comment.id;
-  return runFakebookAIForCommentReply({ post_id: postId, comment_id: aiTargetId, content: comment.content });
+  return runFakebookAIForCommentReply({ post_id: postId, comment_id: comment.id, content: comment.content });
 }
 export async function react(target: string, reaction: 'like'|'dislike'|'haha') {
   const { db, user } = await human();
