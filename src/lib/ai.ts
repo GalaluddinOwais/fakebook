@@ -116,7 +116,7 @@ export async function runFakebookAIForHumanEvent(event: Event) {
 
 /** Human top-level comments get 1-5 distinct AI replies; replies to AI comments get one response. */
 export async function runFakebookAIForCommentReply(event: { post_id: string; comment_id: string; content: string }) {
-  if (process.env.AI_ENABLED === 'false' || !process.env.GEMINI_API_KEY) return;
+  if (process.env.AI_ENABLED === 'false' || !process.env.GEMINI_API_KEY) return [];
   const db = admin();
   try {
     const [{ data: post }, { data: target }, { data: context }, { data: profiles }] = await Promise.all([
@@ -125,7 +125,7 @@ export async function runFakebookAIForCommentReply(event: { post_id: string; com
       db.from('comments').select('content,parent_comment_id,author:profiles(display_name,username,account_type)').eq('post_id', event.post_id).order('created_at', { ascending: false }).limit(12),
       db.from('profiles').select('id,display_name,username,personality,writing_style').eq('account_type', 'ai').limit(15),
     ]);
-    if (!post || !target || !profiles?.length) return;
+    if (!post || !target || !profiles?.length) return [];
     const targetAuthor = singleRelation(target.author);
     const isHumanTopLevelComment = target.parent_comment_id === null && targetAuthor?.account_type === 'human';
     const replyCount = isHumanTopLevelComment ? 1 + Math.floor(Math.random() * Math.min(5, profiles.length)) : 1;
@@ -136,16 +136,21 @@ export async function runFakebookAIForCommentReply(event: { post_id: string; com
     const provider: AIProvider = new GeminiProvider();
     const parsed = z.object({ replies: z.array(z.string().trim().min(1).max(500)).length(replyCount) }).safeParse(JSON.parse(await provider.generateStructuredJSON(prompt)));
     if (!parsed.success) throw new Error('Gemini returned invalid comment replies.');
+    const revealStartedAt = Date.now();
     const replies = parsed.data.replies.map((content, index) => ({
       post_id: event.post_id,
       author_id: candidates[index].id,
       parent_comment_id: target.id,
       content,
+      visible_at: new Date(revealStartedAt + (index + 1) * 10_000).toISOString(),
     }));
-    const { error } = await db.from('comments').insert(replies);
+    const { data, error } = await db.from('comments').insert(replies)
+      .select('id,post_id,parent_comment_id,content,created_at,visible_at,author:profiles!comments_author_id_fkey(id,display_name,username,avatar_url,account_type),comment_reactions(reaction,user_id,created_at)');
     if (error) throw new Error(`Could not save AI comment replies: ${error.message}`);
+    return data || [];
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Fakebook AI comment reply failed: ${message}`);
+    return [];
   }
 }

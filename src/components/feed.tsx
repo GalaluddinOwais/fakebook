@@ -2,8 +2,8 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
-import { advancePostReactionCounts, react, sharePost } from '@/app/actions';
+import { useEffect, useMemo, useState } from 'react';
+import { advancePostReactionCounts, fetchAIComments, react, sharePost } from '@/app/actions';
 import { Avatar } from '@/components/avatar';
 import { CommentThread } from '@/components/comment-thread';
 import { PostMenu } from '@/components/post-menu';
@@ -16,6 +16,7 @@ type PostReaction = { reaction: string; user_id: string; created_at: string };
 type CommentReaction = { reaction: string; user_id: string; created_at: string };
 type FeedComment = {
   id: string;
+  post_id?: string;
   parent_comment_id: string | null;
   content: string;
   created_at: string;
@@ -61,6 +62,12 @@ export function Feed({ posts, userId }: { posts: FeedPost[]; userId: string | nu
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const router = useRouter();
   const [now, setNow] = useState(() => Date.now());
+  const [polledAIComments, setPolledAIComments] = useState<Record<string, FeedComment[]>>({});
+  const currentPosts = useMemo(() => posts.map(post => {
+    const existing = post.comments || [];
+    const additions = (polledAIComments[post.id] || []).filter(comment => !existing.some(item => item.id === comment.id));
+    return additions.length ? { ...post, comments: [...existing, ...additions] } : post;
+  }), [posts, polledAIComments]);
   const [aiCounts, setAiCounts] = useState<Record<string, ReactionCounts>>(() => Object.fromEntries(
     posts.map(post => [post.id, {
       likes: post.ai_likes_shown || 0,
@@ -110,7 +117,7 @@ export function Feed({ posts, userId }: { posts: FeedPost[]; userId: string | nu
       || counts.haha < (post.ai_haha_decided || 0);
   }).map(post => post.id).join(',');
 
-  const waitingForAIContent = posts.some(post => {
+  const waitingForAIContent = currentPosts.some(post => {
     const recentHumanPost = one(post.author)?.account_type === 'human'
       && now - new Date(post.created_at).getTime() < 120_000;
     const aiTopLevelComments = post.comments?.filter(comment =>
@@ -132,6 +139,18 @@ export function Feed({ posts, userId }: { posts: FeedPost[]; userId: string | nu
         && one(reply.author)?.account_type === 'ai'
         && new Date(reply.created_at).getTime() > new Date(comment.created_at).getTime(),
       );
+    });
+  });
+  const waitingForAIReply = currentPosts.some(post => {
+    const byId = new Map((post.comments || []).map(comment => [comment.id, comment]));
+    return (post.comments || []).some(comment => {
+      if (one(comment.author)?.account_type !== 'human' || !comment.parent_comment_id
+        || now - new Date(comment.created_at).getTime() >= 120_000) return false;
+      const parent = byId.get(comment.parent_comment_id);
+      if (!parent || one(parent.author)?.account_type !== 'ai') return false;
+      return !(post.comments || []).some(reply => reply.parent_comment_id === parent.id
+        && one(reply.author)?.account_type === 'ai'
+        && new Date(reply.created_at).getTime() > new Date(comment.created_at).getTime());
     });
   });
 
@@ -170,18 +189,51 @@ export function Feed({ posts, userId }: { posts: FeedPost[]; userId: string | nu
   }, [batchKey]);
 
   useEffect(() => {
-    if (!waitingForAIContent) return;
-    let ticks = 0;
-    const timer = setInterval(() => {
-      router.refresh();
-      ticks += 1;
-      if (ticks >= 60) clearInterval(timer);
-    }, 60_000);
+    const timer = setInterval(() => router.refresh(), 60_000);
     return () => clearInterval(timer);
-  }, [waitingForAIContent, router]);
+  }, [router]);
+
+  useEffect(() => {
+    if (!waitingForAIContent) return;
+    let active = true;
+    const tick = async () => {
+      const ids = currentPosts.filter(post => {
+        const recentHumanPost = one(post.author)?.account_type === 'human'
+          && now - new Date(post.created_at).getTime() < 120_000;
+        const aiTopLevelComments = post.comments?.filter(comment => comment.parent_comment_id === null && one(comment.author)?.account_type === 'ai') || [];
+        if (recentHumanPost && aiTopLevelComments.length < (post.ai_reactions_reveal_steps ?? 10)) return true;
+        const byId = new Map((post.comments || []).map(comment => [comment.id, comment]));
+        return (post.comments || []).some(comment => {
+          if (one(comment.author)?.account_type !== 'human' || now - new Date(comment.created_at).getTime() >= 120_000) return false;
+          const parent = comment.parent_comment_id ? byId.get(comment.parent_comment_id) : null;
+          const targetId = comment.parent_comment_id && one(parent?.author)?.account_type === 'ai' ? comment.parent_comment_id : comment.parent_comment_id ? null : comment.id;
+          return !!targetId && !(post.comments || []).some(reply => reply.parent_comment_id === targetId && one(reply.author)?.account_type === 'ai' && new Date(reply.created_at).getTime() > new Date(comment.created_at).getTime());
+        });
+      }).map(post => post.id);
+      if (!ids.length) return;
+      try {
+        const rows = await fetchAIComments(ids);
+        if (!active) return;
+        setPolledAIComments(current => {
+          const next = { ...current };
+          for (const row of rows as FeedComment[]) {
+            if (!row.post_id) continue;
+            const author = one(row.author);
+            const normalized = { ...row, author } as FeedComment;
+            const list = next[row.post_id] || [];
+            if (!list.some(item => item.id === row.id)) next[row.post_id] = [...list, normalized];
+          }
+          return next;
+        });
+      } catch { /* The next interval will retry. */ }
+    };
+    void tick();
+    const timer = setInterval(() => void tick(), 15_000);
+    return () => { active = false; clearInterval(timer); };
+  }, [waitingForAIContent, waitingForAIReply, currentPosts, now]);
 
   return <div className="posts">
-    {posts.map(post => {
+    {currentPosts.map(post => {
       const visibleReactions = post.post_reactions?.filter(reaction => new Date(reaction.created_at).getTime() <= now) || [];
       const visibleComments = post.comments?.filter(comment => new Date(comment.visible_at || comment.created_at).getTime() <= now) || [];
       const postAuthor = one(post.author) || fallbackProfile(post.author_id);
@@ -189,7 +241,7 @@ export function Feed({ posts, userId }: { posts: FeedPost[]; userId: string | nu
       const originalAuthor = one(original?.author);
       const nestedOriginal = one(original?.original);
       const nestedAuthor = one(nestedOriginal?.author);
-      const threadComments = visibleComments.map(comment => ({
+      const threadComments = (post.comments || []).map(comment => ({
         ...comment,
         author: one(comment.author) || fallbackProfile(),
       }));

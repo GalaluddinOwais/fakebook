@@ -4,6 +4,8 @@ import { Feed } from '@/components/feed';
 import { createPost, updateProfile } from './actions';
 import { SubmitButton } from '@/components/submit-button';
 
+export const maxDuration = 60;
+
 export default async function Home() {
   const db = await createClient(); const { data: { user } } = await db.auth.getUser();
   const [{ data: profile }, { data: rawPosts, error }] = await Promise.all([

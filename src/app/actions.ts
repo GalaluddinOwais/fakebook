@@ -20,6 +20,21 @@ export async function advancePostReactionCounts(postIds: string[] | string) {
   }));
   return legacySinglePostCall ? results[0]?.counts || null : results;
 }
+export async function fetchAIComments(postIds: string[]) {
+  if (!Array.isArray(postIds) || postIds.length > 30 || postIds.some(id => !/^[0-9a-f-]{36}$/i.test(id))) return [];
+  if (!postIds.length) return [];
+  const db = await createClient();
+  const { data, error } = await db.from('comments')
+    .select('id,post_id,parent_comment_id,content,created_at,visible_at,author:profiles!comments_author_id_fkey(id,display_name,username,avatar_url,account_type),comment_reactions(reaction,user_id,created_at)')
+    .in('post_id', postIds)
+    .order('created_at', { ascending: false })
+    .limit(300);
+  if (error) throw new Error(`Could not refresh AI comments: ${error.message}`);
+  return (data || []).filter(comment => {
+    const author = Array.isArray(comment.author) ? comment.author[0] : comment.author;
+    return author?.account_type === 'ai';
+  });
+}
 export async function createPost(form: FormData) {
   const { db, user } = await human(); const content = String(form.get('content') || '').trim(); if (!content || content.length > 2000) throw new Error('Post must be 1–2000 characters.');
   const { data, error } = await db.from('posts').insert({ author_id: user.id, content, kind: 'original' }).select('id').single(); if (error) throw error;
@@ -75,7 +90,8 @@ export async function addComment(form: FormData) {
     .single();
   if (error) throw error;
   revalidatePath('/', 'layout');
-  return { comment: data, shouldTriggerAI: !parent_comment_id || replyingToAI };
+  const shouldTriggerAI = !parent_comment_id || replyingToAI;
+  return { comment: data, shouldTriggerAI, aiTargetId: shouldTriggerAI ? (replyingToAI ? parent_comment_id : data.id) : null };
 }
 export async function triggerCommentAI(postId: string, commentId: string) {
   const { db, user } = await human();
@@ -99,10 +115,7 @@ export async function triggerCommentAI(postId: string, commentId: string) {
   }
   if (!shouldTrigger) return;
   const aiTargetId = comment.parent_comment_id || comment.id;
-  after(async () => {
-    await runFakebookAIForCommentReply({ post_id: postId, comment_id: aiTargetId, content: comment.content });
-    revalidatePath('/', 'layout');
-  });
+  return runFakebookAIForCommentReply({ post_id: postId, comment_id: aiTargetId, content: comment.content });
 }
 export async function react(target: string, reaction: 'like'|'dislike'|'haha') {
   const { db, user } = await human();
